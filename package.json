@@ -1,15 +1,31 @@
 {
-  "name": "kpt-bot",
+  "name": "memoji-bot",
   "version": "0.1.0",
-  "description": "Slack bot for KPT retrospect",
+  "description": "Slack bot for memo by emoji",
   "main": "index.js",
-  "author": "Masato Ohba <over.rye@gmail.com> (http://ohbarye.me/)",
+  "author": "Yamitzky <negiga@gmail.com> (https://yamitzky.com/)",
   "license": "MIT",
   "engines": {
     "node": ">= 6.0"
   },
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged"
+    }
+  },
+  "lint-staged": {
+    "*.{js,json,css,md}": [
+      "prettier --write",
+      "git add"
+    ]
+  },
   "dependencies": {
-    "botkit": "^0.4.3",
-    "moment-timezone": "^0.5.11"
+    "botkit": "^0.7.0",
+    "moment": "^2.24.0"
+  },
+  "devDependencies": {
+    "husky": "^1.3.1",
+    "lint-staged": "^8.1.5",
+    "prettier": "^1.16.4"
   }
 }

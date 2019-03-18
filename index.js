@@ -1,152 +1,102 @@
-'use strict';
+'use strict'
 
-const Botkit = require('botkit');
-const moment = require('moment-timezone');
+const Botkit = require('botkit')
+const moment = require('moment')
+const { promisify } = require('util')
 
-const slackBotToken = process.env.SLACK_BOT_TOKEN;
+const slackBotToken = process.env.SLACK_BOT_TOKEN
 
 if (!slackBotToken) {
-  console.log('Error: Specify token in environment');
-  process.exit(1);
+  console.log('Error: Specify token in environment')
+  process.exit(1)
 }
 
 const commonParams = {
-  token: slackBotToken,
-};
+  token: slackBotToken
+}
 
 const controller = Botkit.slackbot({
   debug: !!process.env.DEBUG
-});
+})
 
 const bot = controller.spawn({
   token: slackBotToken
 })
 
-bot.startRTM(function(err, bot, payload) {
+bot.startRTM((err) => {
   if (err) {
-    throw new Error('Could not connect to Slack');
+    throw new Error('Could not connect to Slack')
   }
-});
+})
 
 /*
    This KPI bot waits for you to call him. Here is sample usage.
 
    Format:
-     @bot-name summary $from_date $to_date
-     - from_date: Required. Start of time range of messages.
-     - to_date:   Optional. End of time range of messages.
+     @bot-name :emoji: $interval
+     - interval: Required. Start of time range of messages.
 
    Sample:
-     @bot-name 2016-11-01 2016-11-30
+     @bot-name :kpt: 7 days
 
-     The bot gathers KPTs you posted 2016-11-01 00:00:00 to 2016-11-30 23:59:59 in your timezone
+     The bot gathers KPTs you posted from 7 days ago to now in your timezone
      from history of a channel you called the bot.
 
    ```
-   K
+   :kpt:
    - Started daily meeting
    - Find a release blocker earlier
-   P
-   - Cannot help each other... :cry:
-   T
-   - How about going lunch? :smile:
    ```
  */
-controller.hears("^summary (.+)",["direct_message","direct_mention","mention"], (bot, message) => {
-  let users;
+controller.hears(
+  ['(:[^:]+:)\\s*(\\d+)\\s*([^.]*)'],
+  'direct_mention,mention',
+  async (bot, message) => {
+    const [_, emoji, interval, unit] = message.match
+    const oldest = moment(
+      moment() - moment.duration(parseInt(interval), unit)
+    ).unix()
 
-  const fetchUserListDone = (err, res) => {
-    checkError(err);
-    users = res.members;
+    const { members } = await promisify(bot.api.users.list)({})
+    const { messages } = await promisify(bot.api.channels.history)({
+      channel: message.channel,
+      count: 1000,
+      oldest
+    })
 
-    // https://api.slack.com/methods/channels.history
-    bot.api.callAPI('channels.history', paramsToFetchChannelHistory(message, users), postSummary);
-  };
-
-  const postSummary = (err, res) => {
-    checkError(err);
-
-    let result = { K: [], P: [], T: [] };
-
-    for (const message of res.messages) {
-      if (!message.text) {
-        continue;
-      }
-
-      const matched = message.text.match(/^([KkPpTt])\s+(.+)/);
-
-      if (matched) {
-        result[matched[1].toUpperCase()].push({
-          content: matched[2],
-          userId: message.user,
-          reactions: (message.reactions || []),
-        });
+    const result = [`${emoji} since ${interval} ${unit} ago`]
+    for (const msg of messages) {
+      if (msg.text && msg.text.startsWith(emoji) && !msg.bot_id) {
+        const text = msg.text.substring(emoji.length).trim()
+        const user = members.find(({ id }) => id === msg.user) || {}
+        const reactions = msg.reactions
+          ? msg.reactions.map(({ name }) => `:${name}:`)
+          : ''
+        result.push(`- ${text} by ${user.name} ${reactions}`)
       }
     }
 
-    bot.reply(message, createSummary(result, users));
-  };
-
-  // https://api.slack.com/methods/users.list
-  bot.api.callAPI('users.list', commonParams, fetchUserListDone)
-});
+    bot.reply(message, result.join('\n'))
+  }
+)
 
 /*
    If no command matched, show usage.
  */
-controller.hears("^((?!summary).)*$",["direct_message","direct_mention","mention"], (bot, message) => {
-  const reply = `
+controller.hears(
+  '^help$',
+  ['direct_message', 'direct_mention', 'mention'],
+  (bot, message) => {
+    const reply = `
 Sorry, I can't understand the order. :cry: Can you try again?
 
 Format:
-  @bot-name summary $from_date $to_date
-  - from_date: Required. Start of time range of messages.
-  - to_date:   Optional. End of time range of messages.
+  @bot-name :some emoji: $interval
+  -interval: Required. Start of time range of messages.
 
 Sample:
-  @bot-name summary 2016-11-01 2016-11-30
-  @bot-name summary 2016-11-01
-`;
-  bot.reply(message, reply);
-});
-
-const checkError = (err) => {
-  if (err) {
-    throw new Error(`Slack API returns an error. error code: ${err}`);
+  @bot-name :kpt: 7 days
+`
+    bot.reply(message, reply)
   }
-};
-
-const createSummary = (result, users) => {
-  return ['K', 'P', 'T'].map((section) => {
-    return `## ${section}\n\n${createSectionSummary(result[section], users)}\n`
-  }).join('\n')
-};
-
-const createSectionSummary = (elements, users) => {
-  return elements.map(e => {
-    const username = users.find(u => u.id == e.userId).name;
-    const reactions = e.reactions.map(r => ` :${r.name}: `.repeat(r.count)).join('');
-
-    return `- ${e.content} by ${username} ${reactions}`;
-  }).reverse().join('\n')
-};
-
-const paramsToFetchChannelHistory = (message, users) => {
-  const [from_date, to_date] = message.match[1].split(' ');
-
-  const userTimezone = users.find(u => u.id == message.user).tz;
-
-  let params = Object.assign(commonParams, {
-    channel: message.channel,
-    oldest: moment.tz(from_date, userTimezone).unix(),
-    count: 1000,
-  });
-
-  // `latest` is optional parameter, and its default value is `now`.
-  if (to_date) {
-    params = Object.assign(params, {
-      latest: moment.tz(to_date, userTimezone).endOf('day').unix(),
-    });
-  }
-  return params;
-};
+)
